@@ -736,20 +736,40 @@ function triggerSync(leftSel, rightSel) {
   );
 }
 
-let stockData, processedData, rankingData;
+let stockData, processedData, rankingData, homepageIndex, dataManifest;
 let stockSearchIndex = [];
 let allDates = [];
 let currentETF = null, currentMode = 'dashboard';
 let dashboardETF = null, currentWeekOffset = 0;
 let chartInstances = new Map();
 let latestDataDate = null;
+let _stockDataPromise = null;
 
 // 同一個兩小時區間內，直接使用瀏覽器 Cache Storage 的 JSON；
 // 避免每次開啟網站都重新下載大型歷史與股價檔案。
+const BROWSER_CACHE_NAME = 'active-etf-radar-v2';
+const BROWSER_CACHE_BUCKETS_TO_KEEP = 2;
+
 function _browserCacheKey(url) {
   const hour = new Date().getUTCHours();
   const bucket = new Date().toISOString().slice(0, 10) + 'T' + String(Math.floor(hour / 2) * 2).padStart(2, '0');
   return `${url}${url.includes('?') ? '&' : '?'}_cache_bucket=${bucket}`;
+}
+
+async function _pruneBrowserCache(cache) {
+  const groups = new Map();
+  for (const request of await cache.keys()) {
+    const parsed = new URL(request.url);
+    const bucket = parsed.searchParams.get('_cache_bucket');
+    if (!bucket) continue;
+    parsed.searchParams.delete('_cache_bucket');
+    const group = parsed.toString();
+    (groups.get(group) || groups.set(group, []).get(group)).push({ request, bucket });
+  }
+  await Promise.all([...groups.values()].flatMap(entries => entries
+    .sort((a, b) => b.bucket.localeCompare(a.bucket))
+    .slice(BROWSER_CACHE_BUCKETS_TO_KEEP)
+    .map(({ request }) => cache.delete(request))));
 }
 
 async function _fetchJsonWithBrowserCache(url) {
@@ -758,13 +778,18 @@ async function _fetchJsonWithBrowserCache(url) {
     if (!response.ok) throw new Error(`${url.split('/').pop()}: HTTP ${response.status}`);
     return response.json();
   }
-  const cache = await caches.open('active-etf-radar-v1');
+  // 升版時移除舊快取，並且每種資料只保留最近兩個兩小時區間。
+  await Promise.all((await caches.keys())
+    .filter(name => name.startsWith('active-etf-radar-') && name !== BROWSER_CACHE_NAME)
+    .map(name => caches.delete(name)));
+  const cache = await caches.open(BROWSER_CACHE_NAME);
   const cacheKey = _browserCacheKey(url);
   const cached = await cache.match(cacheKey);
-  if (cached) return cached.json();
+  if (cached) { _pruneBrowserCache(cache); return cached.json(); }
   const response = await fetch(url);
   if (!response.ok) throw new Error(`${url.split('/').pop()}: HTTP ${response.status}`);
   await cache.put(cacheKey, response.clone());
+  _pruneBrowserCache(cache);
   return response.json();
 }
 
@@ -806,8 +831,9 @@ function _buildDateChangeIndex() {
         const movement = delta > 0 ? 'add' : delta < 0 ? 'reduce' : null;
         if (!lifecycle && !movement) continue;
         const day = _dateChangeIndex[dateStr] ||= {};
-        const entry = day[etf] ||= { new: [], deleted: [], add: [], reduce: [] };
+        const entry = day[etf] ||= { new: [], deleted: [], add: [], reduce: [], all: [] };
         const item = { code: stockCode, name: stockInfo.name, count: record.count, countChange: delta, date: dateStr, status: record.status };
+        if (record.status) entry.all.push({ ...item, count_change: delta, weight: record.weight, weight_change: record.weight_change });
         // 日曆只讀 new/deleted；儀表板則額外讀 add/reduce。首次出現／出清不重複列進加減碼。
         if (lifecycle) entry[lifecycle].push(item);
         else if (movement) entry[movement].push(item);
@@ -819,6 +845,51 @@ function _buildDateChangeIndex() {
 // ===== 資料載入 =====
 // GitHub Pages 靜態部署版：直接讀取公開資料快取，不依賴 Netlify Function。
 const ETF_DATA_BASE_URL = 'https://raw.githubusercontent.com/yoyo3316/ETF-gemini/main';
+const DATA_MANIFEST_URL = `${ETF_DATA_BASE_URL}/data_manifest.json`;
+const HOMEPAGE_INDEX_URL = `${ETF_DATA_BASE_URL}/homepage_index.json`;
+const PUBLIC_DATA_SCHEMA_VERSION = 1;
+
+function _setFullStockData(data) {
+  stockData = data;
+  stockSearchIndex = Object.entries(stockData).map(([code, info]) => ({
+    code, name: info.name || '', key: (code + ' ' + (info.name || '')).toLowerCase(), holdings: info.etf_holdings
+  }));
+  if (homepageIndex) return;
+  const dateSet = new Set();
+  for (const stockItem of Object.values(stockData)) {
+    for (const etfHolding of Object.values(stockItem.etf_holdings || {})) {
+      for (const record of etfHolding.history || []) dateSet.add(record.date);
+    }
+  }
+  allDates = Array.from(dateSet).map(normalizeDate).sort().reverse();
+  _buildDateChangeIndex();
+}
+
+async function _ensureStockData() {
+  if (stockData) return stockData;
+  if (!_stockDataPromise) {
+    _stockDataPromise = _fetchJsonWithBrowserCache(`${ETF_DATA_BASE_URL}/stock_history_data.json`)
+      .then(data => { _setFullStockData(data); return data; })
+      .catch(error => { _stockDataPromise = null; throw error; });
+  }
+  return _stockDataPromise;
+}
+
+function _applyManifestStatus(manifest) {
+  if (!manifest) return;
+  if (manifest.schema_version !== PUBLIC_DATA_SCHEMA_VERSION) {
+    throw new Error(`資料版本不相容（網站 v${PUBLIC_DATA_SCHEMA_VERSION}／資料 v${manifest.schema_version}）`);
+  }
+  dataManifest = manifest;
+  const generatedAt = new Date(manifest.generated_at);
+  const ageHours = Number.isFinite(generatedAt.getTime()) ? (Date.now() - generatedAt.getTime()) / 3600000 : null;
+  const status = document.getElementById('updateTime');
+  if (status && Number.isFinite(ageHours)) {
+    const stale = ageHours > 36;
+    status.textContent = `${stale ? '⚠️ ' : ''}資料產生：${manifest.generated_at.slice(0, 16).replace('T', ' ')}${stale ? `（已 ${Math.floor(ageHours)} 小時未更新）` : ''}`;
+    status.title = `資料契約版本 ${manifest.schema_version}；最新持股日期 ${manifest.latest_data_date || '未提供'}`;
+  }
+}
 
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -828,39 +899,31 @@ document.addEventListener('DOMContentLoaded', () => {
   };
   Promise.all([
     loadJson('processed_etf_data.json'),
-    loadJson('stock_history_data.json'),
-    loadJson('active_etf_ranking.json', true)
+    _fetchJsonWithBrowserCache(HOMEPAGE_INDEX_URL).catch(() => null),
+    loadJson('active_etf_ranking.json', true),
+    _fetchJsonWithBrowserCache(DATA_MANIFEST_URL).catch(() => null)
   ])
-  .then(([processed, stock, ranking]) => {
+  .then(async ([processed, index, ranking, manifest]) => {
     processedData = processed;
-    stockData     = stock;
     rankingData   = ranking;
-    // 搜尋時不再重掃完整 stockData，僅比對預先建立的輕量索引。
-    stockSearchIndex = Object.entries(stockData).map(([code, info]) => ({
-      code, name: info.name || '', key: (code + ' ' + (info.name || '')).toLowerCase(), holdings: info.etf_holdings
-    }));
-
-    const dateSet = new Set();
-    for(const stockItem of Object.values(stockData)){
-      if(stockItem.etf_holdings){
-        for(const etfHolding of Object.values(stockItem.etf_holdings)){
-          if(etfHolding.history){
-            for(const record of etfHolding.history) dateSet.add(record.date);
-          }
-        }
-      }
+    _applyManifestStatus(manifest);
+    homepageIndex = index?.schema_version === PUBLIC_DATA_SCHEMA_VERSION ? index : null;
+    if (homepageIndex) {
+      stockSearchIndex = (homepageIndex.stock_search || []).map(item => ({ ...item, key: `${item.code} ${item.name || ''}`.toLowerCase() }));
+      allDates = homepageIndex.all_dates || [];
+      _dateChangeIndex = homepageIndex.changes_by_date || {};
+    } else {
+      _setFullStockData(await _ensureStockData());
     }
-    allDates = Array.from(dateSet).map(normalizeDate).sort().reverse();
 
     if(allDates.length > 0){
       const ds = allDates[0]; // YYYYMMDD after normalizeDate
       latestDataDate = new Date(ds.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3'));
       const first = processedData[Object.keys(processedData)[0]];
-      if(first && first.latest_date) document.getElementById('updateTime').textContent = '最新更新: '+first.latest_date;
+      if(first && first.latest_date && !manifest) document.getElementById('updateTime').textContent = '最新更新: '+first.latest_date;
     }
     currentWeekOffset = 0;
-    _buildDateChangeIndex();    // 預建日期查詢索引（O(1) 加速週曆渲染）
-    // 6MB+ 股價快取僅在開啟個股明細或最大漲幅排行時載入，避免首頁下載不必要資料。
+    // 完整歷史與股價快取只在開啟明細／最大漲幅時載入，降低首頁下載量。
     buildETFTabs();
     renderCalendar();
     renderChanges();
@@ -1187,20 +1250,10 @@ function renderUnifiedChanges(targetDate){
   document.getElementById('changesNavLabel').textContent = `${formattedDate}  (第 ${dateIndex+1} / ${allDates.length} 筆)`;
   document.getElementById('changesPrevBtn').disabled = dateIndex >= allDates.length-1;
   document.getElementById('changesNextBtn').disabled = dateIndex <= 0;
-  const changes = [];
-  for(const [stockCode, stockInfo] of Object.entries(stockData)){
-    const etfInfo = stockInfo.etf_holdings?.[selectedETF];
-    if(!etfInfo || !etfInfo.history) continue;
-    const recIdx = etfInfo.history.findIndex(r => normalizeDate(r.date) === formattedDate);
-    if(recIdx === -1) continue;
-    const record = etfInfo.history[recIdx];
-    if(!record || !record.status) continue;
-    let cc = record.count_change, wc = record.weight_change;
-    if(record.status === '首次出現'){ cc = record.count ?? 0; wc = record.weight ?? 0; }
-    else if(record.status === '出清'){ if(!cc && recIdx>0){ const prev=etfInfo.history[recIdx-1]; cc=-(prev.count??0); wc=-(prev.weight??0); } }
-    else { if(cc==null && recIdx>0){ const prev=etfInfo.history[recIdx-1]; cc=(record.count??0)-(prev.count??0); wc=parseFloat(((record.weight??0)-(prev.weight??0)).toFixed(4)); } }
-    changes.push({code:stockCode, name:stockInfo.name, ...record, count_change:cc, weight_change:wc, display_status:getChangeDisplayStatus(record,cc)});
-  }
+  const indexedChanges = _dateChangeIndex?.[formattedDate]?.[selectedETF]?.all;
+  const changes = indexedChanges
+    ? indexedChanges.map(record => ({ ...record, display_status: getChangeDisplayStatus(record, record.count_change) }))
+    : [];
   // 異動查詢改為直接呈現清單，不顯示容易造成干擾的分類統計卡。
   const changesSummary = document.getElementById('changesSummary');
   if (changesSummary) changesSummary.innerHTML = '';
@@ -1649,7 +1702,12 @@ async function _fillHistReturnCard(stockCode, etf, canvasId) {
 }
 
 
-function showStockDetail(stockCode, preferredETF=null){
+async function showStockDetail(stockCode, preferredETF=null){
+  // 首頁只載入摘要；使用者真的開啟個股時才下載完整歷史。
+  if (!stockData) {
+    try { await _ensureStockData(); }
+    catch (error) { alert('持股明細載入失敗，請稍後再試'); return; }
+  }
   const stock = stockData[stockCode];
   if(!stock || !stock.etf_holdings){ alert('找不到股票資料'); return; }
   const _allEtfList = Object.keys(stock.etf_holdings);
@@ -1906,183 +1964,7 @@ function addChartScrollbar(canvasId, chart, labels){
   addChartRangeSlider(canvasId, chart, labels);
 }
 
-function addChartRangeSlider(canvasId, chart, labels){
-  const canvas = document.getElementById(canvasId);
-  if(!canvas) return;
-  const container = canvas.closest('.chart-container');
-  if(!container) return;
-  // Remove old
-  const old = container.querySelector('.rs-wrap');
-  if(old) old.remove();
-  const n = labels.length;
-  if(n <= 10) return;
-
-  const WIN = Math.min(Math.max(Math.round(n * 0.35), 15), 60);
-  // State: fractions 0..1
-  let L = (n - WIN) / n;  // left thumb (start fraction)
-  let R = 1.0;             // right thumb (end fraction)
-
-  const posToIdx = p => Math.min(n-1, Math.max(0, Math.round(p*(n-1))));
-  const idxToFrac = i => i/(n-1);
-
-  function applyRange(){
-    const li = posToIdx(L), ri = posToIdx(R);
-    if(li >= ri) return;
-    chart.options.scales.x.min = labels[li];
-    chart.options.scales.x.max = labels[ri];
-    chart.update('none');
-  }
-
-  // Build DOM
-  const wrap = document.createElement('div');
-  wrap.className = 'rs-wrap';
-
-  const dates = document.createElement('div');
-  dates.className = 'rs-dates';
-  const dL = document.createElement('span'); dL.id = canvasId+'_dL';
-  const dR = document.createElement('span'); dR.id = canvasId+'_dR';
-  dL.textContent = labels[posToIdx(L)];
-  dR.textContent = labels[posToIdx(R)];
-  dates.appendChild(dL); dates.appendChild(dR);
-
-  const hint = document.createElement('div');
-  hint.className = 'rs-hint';
-  hint.textContent = '◀ 左右拖曳縮放  ·  中段拖曳平移 ▶';
-
-  const track = document.createElement('div');
-  track.className = 'rs-track';
-
-  const bg = document.createElement('div'); bg.className = 'rs-track-bg';
-  const fill = document.createElement('div'); fill.className = 'rs-fill';
-  const tL = document.createElement('div'); tL.className = 'rs-thumb'; tL.innerHTML='<span class="rs-thumb-icon">◀▶</span>';
-  const tR = document.createElement('div'); tR.className = 'rs-thumb'; tR.innerHTML='<span class="rs-thumb-icon">◀▶</span>';
-
-  track.appendChild(bg); track.appendChild(fill);
-  track.appendChild(tL); track.appendChild(tR);
-  wrap.appendChild(dates); wrap.appendChild(hint); wrap.appendChild(track);
-  container.appendChild(wrap);
-
-  function getTrackRect(){ return track.getBoundingClientRect(); }
-  function clientXToFrac(cx){
-    const r = getTrackRect();
-    const pad = 10; // matches rs-track padding
-    return Math.min(1, Math.max(0, (cx - r.left - pad) / (r.width - pad*2)));
-  }
-
-  function updateDOM(){
-    const r = getTrackRect();
-    const usableW = r.width - 20; // track padding 10 each side
-    const lPx = 10 + L * usableW;
-    const rPx = 10 + R * usableW;
-    tL.style.left = lPx + 'px';
-    tR.style.left = rPx + 'px';
-    fill.style.left  = lPx + 'px';
-    fill.style.width = (rPx - lPx) + 'px';
-    dL.textContent = labels[posToIdx(L)] || '';
-    dR.textContent = labels[posToIdx(R)] || '';
-  }
-
-  // Drag logic (mouse + touch unified)
-  let dragTarget = null, dragOffL = 0, dragOffR = 0, startL = 0, startR = 0, startFrac = 0;
-  const minGap = 2/(n-1);
-
-  function onMove(cx){
-    if(!dragTarget) return;
-    const f = clientXToFrac(cx);
-    if(dragTarget === 'L'){
-      L = Math.min(R - minGap, Math.max(0, f));
-    } else if(dragTarget === 'R'){
-      R = Math.max(L + minGap, Math.min(1, f));
-    } else { // fill pan
-      const delta = f - startFrac;
-      const w = startR - startL;
-      L = Math.min(1 - w, Math.max(0, startL + delta));
-      R = L + w;
-    }
-    updateDOM();
-    applyRange();
-  }
-
-  function getClientX(e){ return e.touches ? e.touches[0].clientX : e.clientX; }
-
-  function startDrag(el, type){
-    el.addEventListener('mousedown', e => { e.preventDefault(); dragTarget=type; startFrac=clientXToFrac(getClientX(e)); startL=L; startR=R; el.classList.add('active'); });
-    el.addEventListener('touchstart', e => { e.preventDefault(); dragTarget=type; startFrac=clientXToFrac(getClientX(e)); startL=L; startR=R; el.classList.add('active'); }, {passive:false});
-  }
-  startDrag(tL, 'L');
-  startDrag(tR, 'R');
-  startDrag(fill, 'fill');
-
-  document.addEventListener('mousemove', e => { if(dragTarget) onMove(getClientX(e)); });
-  document.addEventListener('touchmove', e => { if(dragTarget){ e.preventDefault(); onMove(getClientX(e)); } }, {passive:false});
-
-  function endDrag(){
-    if(dragTarget){ [tL,tR,fill].forEach(el=>el.classList.remove('active')); dragTarget=null; }
-  }
-  document.addEventListener('mouseup', endDrag);
-  document.addEventListener('touchend', endDrag);
-
-  // Also allow click on track-bg to jump
-  bg.addEventListener('click', e => {
-    const f = clientXToFrac(e.clientX);
-    const mid = (L+R)/2, w = R-L;
-    L = Math.max(0, Math.min(1-w, f - w/2));
-    R = L + w;
-    updateDOM(); applyRange();
-  });
-
-  // Init
-  updateDOM();
-  applyRange();
-
-  // Keyboard support (focus tR by default)
-  tR.tabIndex = 0; tL.tabIndex = 0;
-  tL.addEventListener('keydown', e => {
-    const step = 1/(n-1);
-    if(e.key==='ArrowLeft'){ L=Math.max(0,L-step); }
-    else if(e.key==='ArrowRight'){ L=Math.min(R-minGap,L+step); }
-    else return;
-    e.preventDefault(); updateDOM(); applyRange();
-  });
-  tR.addEventListener('keydown', e => {
-    const step = 1/(n-1);
-    if(e.key==='ArrowLeft'){ R=Math.max(L+minGap,R-step); }
-    else if(e.key==='ArrowRight'){ R=Math.min(1,R+step); }
-    else return;
-    e.preventDefault(); updateDOM(); applyRange();
-  });
-}
-
-// Swipe-down to close bottom sheet
-function initSheetSwipe(modal){
-  const content = modal.querySelector('.modal-content');
-  if(!content) return;
-  let startY=0, curY=0, isDragging=false;
-  const bar = content.querySelector('.sheet-drag-bar');
-  if(!bar) return;
-  bar.addEventListener('touchstart', e => { startY = e.touches[0].clientY; isDragging=true; content.style.transition='none'; }, {passive:true});
-  document.addEventListener('touchmove', e => {
-    if(!isDragging) return;
-    curY = e.touches[0].clientY;
-    const delta = Math.max(0, curY - startY);
-    content.style.transform = `translateY(${delta}px)`;
-  }, {passive:true});
-  document.addEventListener('touchend', () => {
-    if(!isDragging) return;
-    isDragging = false;
-    const delta = curY - startY;
-    content.style.transition = '';
-    if(delta > 100){
-      if (typeof chartInstances !== 'undefined') {
-        chartInstances.forEach((chart, id) => { if (modal.querySelector('#'+id)) { chart.destroy(); chartInstances.delete(id); } });
-      }
-      modal.remove();
-    }
-    else { content.style.transform = ''; }
-  });
-}
-
-
+// Chart range slider and mobile sheet swipe handlers are defined once near the end of this script.
 // =====================================================================
 //  📈 最大漲幅排行榜 — 追蹤 ETF 持股從新增到出清期間的最大漲幅
 //  資料來源：GitHub stock_price_cache.json
@@ -2370,44 +2252,64 @@ function _mgWorkerSource() {
     const changed = Number(rec.count_change ?? rec.countchange);
     return Number.isFinite(changed) ? changed : count - previous;
   };
-  const atOrAfter = (prices, date) => prices.find(p => p.date >= date && Number(p.close ?? p.open) > 0);
+  // Worker 僅接收 [日期, 收盤價, 最高價] 的必要欄位，避免複製整份 6MB+ 快取。
+  const atOrAfter = (prices, date) => prices.find(p => p[0] >= date && Number(p[1]) > 0);
   const atOrBefore = (prices, date) => {
-    for (let i = prices.length - 1; i >= 0; i--) if (prices[i].date <= date && Number(prices[i].close ?? prices[i].open) > 0) return prices[i];
+    for (let i = prices.length - 1; i >= 0; i--) if (prices[i][0] <= date && Number(prices[i][1]) > 0) return prices[i];
     return null;
   };
   const calculate = (period, allPrices, today) => {
     const start = toISO(period.buyDate), end = period.sellDate ? toISO(period.sellDate) : today;
-    const prices = allPrices.filter(p => p.date >= start && p.date <= end);
+    const prices = allPrices.filter(p => p[0] >= start && p[0] <= end);
     if (!prices.length) return null;
     let previous = 0, positionQty = 0, positionCost = 0, buyQty = 0, buyCost = 0, sellValue = 0;
     for (const rec of period.history || []) {
       const qty = transactionQty(rec, previous); previous = Number(rec.count ?? previous);
       if (!qty) continue;
-      const priceRec = atOrAfter(prices, toISO(rec.date)); const price = Number(priceRec?.close ?? priceRec?.open);
+      const priceRec = atOrAfter(prices, toISO(rec.date)); const price = Number(priceRec?.[1]);
       if (!price) continue;
       if (qty > 0) { positionQty += qty; positionCost += qty * price; buyQty += qty; buyCost += qty * price; }
       else if (positionQty > 0) { const sold = Math.min(Math.abs(qty), positionQty); sellValue += sold * price; positionCost -= positionCost / positionQty * sold; positionQty -= sold; if (positionQty < 1e-8) { positionQty = 0; positionCost = 0; } }
     }
-    const endRec = atOrBefore(prices, end), endPrice = Number(endRec?.close ?? endRec?.open), marketValue = positionQty ? positionQty * endPrice : 0;
+    const endRec = atOrBefore(prices, end), endPrice = Number(endRec?.[1]), marketValue = positionQty ? positionQty * endPrice : 0;
     if (!buyCost || (positionQty && !endPrice)) return null;
     const averageBuyPrice = buyCost / buyQty, returnPct = +((sellValue + marketValue - buyCost) / buyCost * 100).toFixed(2);
     const realizedProfit = sellValue - (buyCost - positionCost), unrealizedProfit = marketValue - positionCost;
-    let peakPrice = averageBuyPrice, peakDate = prices[0].date;
-    for (const p of prices) { const high = p.max || p.close || 0; if (high > peakPrice) { peakPrice = high; peakDate = p.date; } }
+    let peakPrice = averageBuyPrice, peakDate = prices[0][0];
+    for (const p of prices) { const high = p[2] || p[1] || 0; if (high > peakPrice) { peakPrice = high; peakDate = p[0]; } }
     return { code: period.code, name: period.name, etf: period.etf, etfName: period.etfName, buyDate: period.buyDate, sellDate: period.sellDate, holdStatus: period.holdStatus,
-      buyPrice: averageBuyPrice, peakPrice, peakDate, gainPct: +((peakPrice - averageBuyPrice) / averageBuyPrice * 100).toFixed(2), days: days(start, end), currentPrice: endPrice || null, currentReturn: returnPct, currentDate: endRec?.date || null,
+      buyPrice: averageBuyPrice, peakPrice, peakDate, gainPct: +((peakPrice - averageBuyPrice) / averageBuyPrice * 100).toFixed(2), days: days(start, end), currentPrice: endPrice || null, currentReturn: returnPct, currentDate: endRec?.[0] || null,
       positionQty, holdingCost: positionQty ? positionCost / positionQty : null, averageBuyPrice, totalBuyCost: buyCost, totalSellValue: sellValue, realizedProfit, unrealizedProfit,
       realizedPct: +(realizedProfit / buyCost * 100).toFixed(2), unrealizedPct: +(unrealizedProfit / buyCost * 100).toFixed(2), transactionCount: period.history?.length || 0 };
   };
   self.onmessage = ({ data }) => {
     const results = [], total = data.periods.length;
     data.periods.forEach((period, index) => {
-      const result = calculate(period, data.priceData[period.code]?.prices || [], data.today);
+      const result = calculate(period, data.priceData[period.code] || [], data.today);
       if (result) results.push(result);
       if ((index + 1) % 100 === 0 || index + 1 === total) self.postMessage({ type: 'progress', done: index + 1, total });
     });
     self.postMessage({ type: 'done', results, total });
   };
+}
+
+function _buildWorkerPriceData(periods) {
+  const ranges = new Map();
+  const today = new Date().toISOString().slice(0, 10);
+  for (const period of periods) {
+    const start = _mgToISO(period.buyDate);
+    const end = period.sellDate ? _mgToISO(period.sellDate) : today;
+    const range = ranges.get(period.code) || { start, end };
+    range.start = range.start < start ? range.start : start;
+    range.end = range.end > end ? range.end : end;
+    ranges.set(period.code, range);
+  }
+  const compact = {};
+  for (const [code, range] of ranges) {
+    const prices = _getPriceSlice(code, range.start, range.end) || [];
+    if (prices.length) compact[code] = prices.map(p => [p.date, Number(p.close ?? p.open), Number(p.max ?? p.close ?? p.open)]);
+  }
+  return compact;
 }
 
 function _mgComputeMaxGainInWorker(periods, progressEl) {
@@ -2421,7 +2323,7 @@ function _mgComputeMaxGainInWorker(periods, progressEl) {
       if (data.type === 'done') { cleanup(); resolve(data); }
     };
     worker.onerror = () => { cleanup(); resolve(null); };
-    worker.postMessage({ periods, priceData: _stockPriceCache.data, today: new Date().toISOString().slice(0, 10) });
+    worker.postMessage({ periods, priceData: _buildWorkerPriceData(periods), today: new Date().toISOString().slice(0, 10) });
   });
 }
 
@@ -2440,6 +2342,10 @@ async function startLoadMaxGain() {
 
   Object.keys(_priceCache).forEach(k => delete _priceCache[k]);
   _mgAllResults = null;
+
+  // 排行才需要完整持股週期與股價快取。
+  try { await _ensureStockData(); }
+  catch (error) { el.textContent = '持股歷史載入失敗，請稍後再試'; btn.disabled = false; _mgLoading = false; return; }
 
   // 預載 GitHub cache（含預建二分搜尋索引）
   await _loadStockPriceCache();
