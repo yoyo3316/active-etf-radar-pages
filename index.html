@@ -1785,8 +1785,16 @@ function drawTrendChart(canvasId, history){
   }
 
   const ctx = canvas.getContext('2d');
+  // 每次更新都鎖定 0 為 Y 軸基準，避免縮放外掛／首次版面重排改寫資料範圍。
+  const lockZeroBaseline = {
+    id: 'lockZeroBaseline',
+    afterDataLimits(chart, args) {
+      if (args.scale.id === 'y') args.scale.min = 0;
+    }
+  };
   const newChart = new Chart(ctx, {
     type: 'line',
+    plugins: [lockZeroBaseline],
     data: {
       labels,
       datasets:[{
@@ -1801,7 +1809,8 @@ function drawTrendChart(canvasId, history){
     },
     options:{
       responsive:true, maintainAspectRatio:true,
-      animation: counts.length > 100 ? false : { duration: 400 },
+      // Modal 開啟後仍可能改變 Canvas 尺寸；停用座標動畫可避免 0 點短暫停留在舊座標。
+      animation:false,
       layout:{ padding:{ right:18, left:4 } },
       plugins:{
         legend:{display:false},
@@ -1824,7 +1833,7 @@ function drawTrendChart(canvasId, history){
         }
       },
       scales:{
-        y:{min:0, grid:{color:'rgba(0,0,0,0.05)'}, ticks:{font:{size:12,weight:'600'}}},
+        y:{min:0, beginAtZero:true, grace:0, bounds:'ticks', grid:{color:'rgba(0,0,0,0.05)'}, ticks:{font:{size:12,weight:'600'}}},
         x:{
           grid:{display:false},
           ticks:{
@@ -1846,6 +1855,8 @@ function drawTrendChart(canvasId, history){
 
   // ── 水平拖曳軸 ──
   addChartRangeSlider(canvasId, newChart, labels);
+  // 滑桿加入容器後再做一次完整 layout，確保基準線與資料點使用相同的 Canvas 尺寸。
+  requestAnimationFrame(() => { newChart.resize(); newChart.update('none'); });
 }
 
 function addChartScrollbar(canvasId, chart, labels){
