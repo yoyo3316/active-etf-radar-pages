@@ -744,6 +744,30 @@ let dashboardETF = null, currentWeekOffset = 0;
 let chartInstances = new Map();
 let latestDataDate = null;
 
+// 同一個兩小時區間內，直接使用瀏覽器 Cache Storage 的 JSON；
+// 避免每次開啟網站都重新下載大型歷史與股價檔案。
+function _browserCacheKey(url) {
+  const hour = new Date().getUTCHours();
+  const bucket = new Date().toISOString().slice(0, 10) + 'T' + String(Math.floor(hour / 2) * 2).padStart(2, '0');
+  return `${url}${url.includes('?') ? '&' : '?'}_cache_bucket=${bucket}`;
+}
+
+async function _fetchJsonWithBrowserCache(url) {
+  if (!('caches' in window)) {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`${url.split('/').pop()}: HTTP ${response.status}`);
+    return response.json();
+  }
+  const cache = await caches.open('active-etf-radar-v1');
+  const cacheKey = _browserCacheKey(url);
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached.json();
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`${url.split('/').pop()}: HTTP ${response.status}`);
+  await cache.put(cacheKey, response.clone());
+  return response.json();
+}
+
 // ===== ETF 短名稱對照表 =====
 const ETF_SHORT_NAMES = {
   '00980A':'野村智慧優選','00981A':'統一台股增長','00982A':'群益精選強棒','00992A':'群益科技創新',
@@ -799,12 +823,8 @@ const ETF_DATA_BASE_URL = 'https://raw.githubusercontent.com/yoyo3316/ETF-gemini
 
 document.addEventListener('DOMContentLoaded', () => {
   const loadJson = async (filename, optional = false) => {
-    const response = await fetch(`${ETF_DATA_BASE_URL}/${filename}`);
-    if (!response.ok) {
-      if (optional) return null;
-      throw new Error(`${filename}: HTTP ${response.status}`);
-    }
-    return response.json();
+    try { return await _fetchJsonWithBrowserCache(`${ETF_DATA_BASE_URL}/${filename}`); }
+    catch (error) { if (optional) return null; throw error; }
   };
   Promise.all([
     loadJson('processed_etf_data.json'),
@@ -2056,8 +2076,7 @@ function _getPriceSlice(code, startDate, endDate) {
 async function _loadStockPriceCache() {
   if (_stockPriceCache) return _stockPriceCache;
   if (_stockCachePromise) return _stockCachePromise;
-  _stockCachePromise = fetch(STOCK_PRICE_CACHE_URL)
-    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+  _stockCachePromise = _fetchJsonWithBrowserCache(STOCK_PRICE_CACHE_URL)
     .then(data => {
       _stockPriceCache = data;
       // 預建所有股票的二分搜尋索引
@@ -2287,6 +2306,71 @@ function _mgComputeGain(period) {
            holdingCost: actual.holdingCost, transactionCount: period.history.length };
 }
 
+// 最大漲幅排行在背景執行緒運算，避免手機主畫面在大量歷史資料計算時無法滑動。
+function _mgWorkerSource() {
+  const toISO = d => String(d).replace(/\//g, '-');
+  const days = (a, b) => Math.round((new Date(b) - new Date(a)) / 86400000);
+  const transactionQty = (rec, previous) => {
+    const count = Number(rec.count || 0);
+    if (rec.status === '首次出現' || rec.status === '新增') return Math.max(0, count);
+    const changed = Number(rec.count_change ?? rec.countchange);
+    return Number.isFinite(changed) ? changed : count - previous;
+  };
+  const atOrAfter = (prices, date) => prices.find(p => p.date >= date && Number(p.close ?? p.open) > 0);
+  const atOrBefore = (prices, date) => {
+    for (let i = prices.length - 1; i >= 0; i--) if (prices[i].date <= date && Number(prices[i].close ?? prices[i].open) > 0) return prices[i];
+    return null;
+  };
+  const calculate = (period, allPrices, today) => {
+    const start = toISO(period.buyDate), end = period.sellDate ? toISO(period.sellDate) : today;
+    const prices = allPrices.filter(p => p.date >= start && p.date <= end);
+    if (!prices.length) return null;
+    let previous = 0, positionQty = 0, positionCost = 0, buyQty = 0, buyCost = 0, sellValue = 0;
+    for (const rec of period.history || []) {
+      const qty = transactionQty(rec, previous); previous = Number(rec.count ?? previous);
+      if (!qty) continue;
+      const priceRec = atOrAfter(prices, toISO(rec.date)); const price = Number(priceRec?.close ?? priceRec?.open);
+      if (!price) continue;
+      if (qty > 0) { positionQty += qty; positionCost += qty * price; buyQty += qty; buyCost += qty * price; }
+      else if (positionQty > 0) { const sold = Math.min(Math.abs(qty), positionQty); sellValue += sold * price; positionCost -= positionCost / positionQty * sold; positionQty -= sold; if (positionQty < 1e-8) { positionQty = 0; positionCost = 0; } }
+    }
+    const endRec = atOrBefore(prices, end), endPrice = Number(endRec?.close ?? endRec?.open), marketValue = positionQty ? positionQty * endPrice : 0;
+    if (!buyCost || (positionQty && !endPrice)) return null;
+    const averageBuyPrice = buyCost / buyQty, returnPct = +((sellValue + marketValue - buyCost) / buyCost * 100).toFixed(2);
+    const realizedProfit = sellValue - (buyCost - positionCost), unrealizedProfit = marketValue - positionCost;
+    let peakPrice = averageBuyPrice, peakDate = prices[0].date;
+    for (const p of prices) { const high = p.max || p.close || 0; if (high > peakPrice) { peakPrice = high; peakDate = p.date; } }
+    return { code: period.code, name: period.name, etf: period.etf, etfName: period.etfName, buyDate: period.buyDate, sellDate: period.sellDate, holdStatus: period.holdStatus,
+      buyPrice: averageBuyPrice, peakPrice, peakDate, gainPct: +((peakPrice - averageBuyPrice) / averageBuyPrice * 100).toFixed(2), days: days(start, end), currentPrice: endPrice || null, currentReturn: returnPct, currentDate: endRec?.date || null,
+      positionQty, holdingCost: positionQty ? positionCost / positionQty : null, averageBuyPrice, totalBuyCost: buyCost, totalSellValue: sellValue, realizedProfit, unrealizedProfit,
+      realizedPct: +(realizedProfit / buyCost * 100).toFixed(2), unrealizedPct: +(unrealizedProfit / buyCost * 100).toFixed(2), transactionCount: period.history?.length || 0 };
+  };
+  self.onmessage = ({ data }) => {
+    const results = [], total = data.periods.length;
+    data.periods.forEach((period, index) => {
+      const result = calculate(period, data.priceData[period.code]?.prices || [], data.today);
+      if (result) results.push(result);
+      if ((index + 1) % 100 === 0 || index + 1 === total) self.postMessage({ type: 'progress', done: index + 1, total });
+    });
+    self.postMessage({ type: 'done', results, total });
+  };
+}
+
+function _mgComputeMaxGainInWorker(periods, progressEl) {
+  if (!window.Worker || !_stockPriceCache?.data) return Promise.resolve(null);
+  return new Promise(resolve => {
+    const blobUrl = URL.createObjectURL(new Blob([`(${_mgWorkerSource.toString()})()`], { type: 'text/javascript' }));
+    const worker = new Worker(blobUrl);
+    const cleanup = () => { worker.terminate(); URL.revokeObjectURL(blobUrl); };
+    worker.onmessage = ({ data }) => {
+      if (data.type === 'progress' && progressEl) progressEl.textContent = `⏳ 背景計算中… ${data.done} / ${data.total}`;
+      if (data.type === 'done') { cleanup(); resolve(data); }
+    };
+    worker.onerror = () => { cleanup(); resolve(null); };
+    worker.postMessage({ periods, priceData: _stockPriceCache.data, today: new Date().toISOString().slice(0, 10) });
+  });
+}
+
 // ── 4. 主載入函式（BATCH 20，按股票分群，requestIdleCallback）──────────
 async function startLoadMaxGain() {
   if (_mgLoading) return;
@@ -2311,8 +2395,13 @@ async function startLoadMaxGain() {
   const results = [];
 
   el.innerHTML = `<div class="no-data" id="mgProgress">⏳ 從 GitHub 快取載入… 0 / ${total}</div>`;
+  const workerResult = await _mgComputeMaxGainInWorker(periods, document.getElementById('mgProgress'));
+  if (workerResult) {
+    _finishMaxGain(workerResult.results, workerResult.total, bannerEl, btn);
+    return;
+  }
 
-  // 按股票分群，同一支股票共用 price slice，減少重複查詢
+  // 不支援 Worker 的舊瀏覽器使用分批主執行緒計算作為 fallback。
   const grouped = {};
   for (const p of periods) (grouped[p.code] = grouped[p.code] || []).push(p);
   const groupEntries = Object.entries(grouped);
