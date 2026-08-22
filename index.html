@@ -893,13 +893,11 @@ function _applyManifestStatus(manifest) {
     throw new Error(`資料版本不相容（網站 v${PUBLIC_DATA_SCHEMA_VERSION}／資料 v${manifest.schema_version}）`);
   }
   dataManifest = manifest;
-  const generatedAt = new Date(manifest.generated_at);
-  const ageHours = Number.isFinite(generatedAt.getTime()) ? (Date.now() - generatedAt.getTime()) / 3600000 : null;
   const status = document.getElementById('updateTime');
-  if (status && Number.isFinite(ageHours)) {
-    const stale = ageHours > 36;
-    status.textContent = `${stale ? '⚠️ ' : ''}資料產生：${manifest.generated_at.slice(0, 16).replace('T', ' ')}${stale ? `（已 ${Math.floor(ageHours)} 小時未更新）` : ''}`;
-    status.title = `資料契約版本 ${manifest.schema_version}；最新持股日期 ${manifest.latest_data_date || '未提供'}`;
+  if (status) {
+    const dataDate = String(manifest.latest_data_date || '').replace(/(\d{4})(\d{2})(\d{2})/, '$1/$2/$3');
+    status.textContent = dataDate ? `最新更新：${dataDate}` : '最新更新：資料日期未提供';
+    status.title = `資料契約版本 ${manifest.schema_version}`;
   }
 }
 
