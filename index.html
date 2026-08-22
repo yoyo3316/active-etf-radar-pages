@@ -831,15 +831,27 @@ function _buildDateChangeIndex() {
         const movement = delta > 0 ? 'add' : delta < 0 ? 'reduce' : null;
         if (!lifecycle && !movement) continue;
         const day = _dateChangeIndex[dateStr] ||= {};
-        const entry = day[etf] ||= { new: [], deleted: [], add: [], reduce: [], all: [] };
-        const item = { code: stockCode, name: stockInfo.name, count: record.count, countChange: delta, date: dateStr, status: record.status };
-        if (record.status) entry.all.push({ ...item, count_change: delta, weight: record.weight, weight_change: record.weight_change });
-        // 日曆只讀 new/deleted；儀表板則額外讀 add/reduce。首次出現／出清不重複列進加減碼。
-        if (lifecycle) entry[lifecycle].push(item);
-        else if (movement) entry[movement].push(item);
+        const entry = day[etf] ||= [];
+        entry.push({ code: stockCode, name: stockInfo.name, count: record.count, weight: record.weight,
+          count_change: delta, weight_change: record.weight_change, date: dateStr, status: record.status });
       }
     }
   }
+}
+
+function _getChangeBucket(dateStr, etf) {
+  const source = _dateChangeIndex?.[dateStr]?.[etf];
+  // 相容於舊快取的分類格式，也支援新版「每筆只存一次」格式。
+  if (!Array.isArray(source)) return source || { new: [], deleted: [], add: [], reduce: [], all: [] };
+  const bucket = { new: [], deleted: [], add: [], reduce: [], all: source };
+  for (const item of source) {
+    const delta = Number(item.count_change ?? item.countChange ?? 0);
+    if (item.status === '新增' || item.status === '首次出現') bucket.new.push(item);
+    else if (item.status === '出清' || item.status === '刪除') bucket.deleted.push(item);
+    else if (delta > 0) bucket.add.push(item);
+    else if (delta < 0) bucket.reduce.push(item);
+  }
+  return bucket;
 }
 
 // ===== 資料載入 =====
@@ -1014,7 +1026,7 @@ function buildETFTabs(){
   const latestKey = latestDataDate ? formatDate(latestDataDate) : '';
   // 上方 ETF 切換只提示「今日」有首次新增或完全刪除；一般加減碼不提示。
   const eventOf = code => {
-    const changes = _dateChangeIndex?.[latestKey]?.[code];
+    const changes = _getChangeBucket(latestKey, code);
     if (!changes) return '';
     if (changes.new?.length && changes.deleted?.length) return '<span class="etf-event-badge mixed">新增／刪除</span>';
     if (changes.new?.length) return '<span class="etf-event-badge new">新增</span>';
@@ -1079,12 +1091,12 @@ function renderDailyDashboard(){
   const date=formatDate(latestDataDate); let cache=_dailySignalCache.get(date);
   if(!cache){
     const byStock=new Map(), day=_dateChangeIndex[date]||{};
-    Object.entries(day).forEach(([etf,changes])=>['add','reduce','new','deleted'].forEach(kind=>(changes[kind]||[]).forEach(item=>{
+    Object.keys(day).forEach(etf=>{const changes=_getChangeBucket(date,etf);['add','reduce','new','deleted'].forEach(kind=>(changes[kind]||[]).forEach(item=>{
       const key=`${item.code}|${kind}`;
       if(!byStock.has(key)) byStock.set(key,{code:item.code,name:item.name,kind,items:[]});
       byStock.get(key).items.push({...item,etf});
-    })));
-    const signals=[...byStock.values()].filter(x=>x.items.length>=2).map(x=>({...x,etfs:x.items.map(i=>i.etf),totalChange:x.items.reduce((n,i)=>n+Math.abs(Number(i.countChange)||0),0)})).sort((a,b)=>b.etfs.length-a.etfs.length||b.totalChange-a.totalChange||a.code.localeCompare(b.code));
+    }));});
+    const signals=[...byStock.values()].filter(x=>x.items.length>=2).map(x=>({...x,etfs:x.items.map(i=>i.etf),totalChange:x.items.reduce((n,i)=>n+Math.abs(Number(i.countChange ?? i.count_change)||0),0)})).sort((a,b)=>b.etfs.length-a.etfs.length||b.totalChange-a.totalChange||a.code.localeCompare(b.code));
     cache={signals};_dailySignalCache.set(date,cache);
   }
   const list=cache.signals.slice(0,12),dateLabel=`${date.slice(0,4)}/${date.slice(4,6)}/${date.slice(6)}`;
@@ -1175,8 +1187,7 @@ function renderCalendar(){
 function getChangesForDate(dateStr, etf) {
   // O(1) 索引查詢（索引建立後使用）
   if (_dateChangeIndex) {
-    const day = _dateChangeIndex[dateStr]?.[etf];
-    return day ? day : { new: [], deleted: [] };
+    return _getChangeBucket(dateStr, etf);
   }
   // fallback：索引尚未建立時線性掃描
   const newStocks = [], deletedStocks = [];
@@ -1216,7 +1227,7 @@ function updateChangeETFTabReminders(dateKey){
   if(!container) return;
   container.querySelectorAll('.etf-event-badge').forEach(el=>el.remove());
   container.querySelectorAll('.etf-tab[data-etf]').forEach(btn=>{
-    const changes=_dateChangeIndex?.[dateKey]?.[btn.dataset.etf];
+    const changes=_getChangeBucket(dateKey, btn.dataset.etf);
     const hasNew=Boolean(changes?.new?.length), hasDeleted=Boolean(changes?.deleted?.length);
     if(!hasNew&&!hasDeleted) return;
     const label=hasNew&&hasDeleted?'新增／刪除':hasNew?'新增':'刪除';
@@ -1250,7 +1261,7 @@ function renderUnifiedChanges(targetDate){
   document.getElementById('changesNavLabel').textContent = `${formattedDate}  (第 ${dateIndex+1} / ${allDates.length} 筆)`;
   document.getElementById('changesPrevBtn').disabled = dateIndex >= allDates.length-1;
   document.getElementById('changesNextBtn').disabled = dateIndex <= 0;
-  const indexedChanges = _dateChangeIndex?.[formattedDate]?.[selectedETF]?.all;
+  const indexedChanges = _getChangeBucket(formattedDate, selectedETF).all;
   const changes = indexedChanges
     ? indexedChanges.map(record => ({ ...record, display_status: getChangeDisplayStatus(record, record.count_change) }))
     : [];
