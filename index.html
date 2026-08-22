@@ -529,10 +529,11 @@ html.low-end .content-section { background: rgba(255,255,255,1) !important; }
 .modal-stats.compact-stats .modal-stat-card .value{line-height:1.05;margin:0;white-space:nowrap;font-size:21px}
 .modal-stats.compact-stats .modal-stat-card:nth-child(-n+2) .value{font-size:27px}
 .modal-stats.compact-stats .modal-stat-card .sub{margin:6px 0 0;min-height:26px;max-width:100%;white-space:normal;overflow:hidden;text-overflow:ellipsis;line-height:1.28;font-size:11px}
-.modal-stats.compact-stats .modal-stat-card[id^="histRetCard_"]{align-items:stretch;justify-content:flex-start;text-align:left;padding:10px 12px!important}
-.modal-stats.compact-stats .modal-stat-card[id^="histRetCard_"] .label{justify-content:center;text-align:center;margin-bottom:3px}
-.modal-stats.compact-stats .modal-stat-card [id^="histRetBody_"]{margin-top:0!important;max-height:68px!important;line-height:1.25}
-.modal-stats.compact-stats .modal-stat-card [id^="histRetBody_"] > div{margin-bottom:3px!important;padding-bottom:3px!important}
+.modal-stats.compact-stats .modal-stat-card[id^="histRetCard_"]{align-items:stretch;justify-content:flex-start;text-align:left;padding:7px 10px!important}
+.modal-stats.compact-stats .modal-stat-card[id^="histRetCard_"] .label{justify-content:center;text-align:center;margin-bottom:1px}
+.modal-stats.compact-stats .modal-stat-card [id^="histRetBody_"]{margin-top:0!important;height:72px!important;max-height:none!important;line-height:1.15;scroll-snap-type:y mandatory;overscroll-behavior:contain}
+.hist-ret-row{height:36px;box-sizing:border-box;padding:3px 0;display:flex;align-items:center;justify-content:space-between;gap:5px;scroll-snap-align:start;scroll-snap-stop:always;border-bottom:1px solid #E2EBF5}
+.hist-ret-row:last-child{border-bottom:0}.hist-ret-main{min-width:0;flex:1}.hist-ret-dates{font-size:10px;line-height:1.1;color:#0F2840;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.hist-ret-meta{margin-top:2px;display:flex;align-items:center;gap:4px;font-size:9px;color:#64748b;white-space:nowrap;overflow:hidden}.hist-ret-status{font-size:9px;font-weight:800;border-radius:4px;padding:1px 4px;line-height:1.15}.hist-ret-value{font-size:15px;font-weight:900;white-space:nowrap;flex-shrink:0}.hist-ret-arrow{position:absolute;right:7px;bottom:4px;display:none;color:#0369A1;font-size:10px;font-weight:900;line-height:1;background:rgba(239,248,255,.9);padding:2px 3px;border-radius:4px;animation:histArrowBounce 1s ease-in-out infinite}
 @media(max-width:768px){.modal-stats.compact-stats{grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-rows:96px;gap:8px}.modal-stats.compact-stats .modal-stat-card,.modal-stats.compact-stats .modal-stat-card:nth-child(-n+2){height:96px;padding:9px}.modal-stats.compact-stats .modal-stat-card:nth-child(-n+2) .value{font-size:24px}.modal-stats.compact-stats .modal-stat-card .value{font-size:19px}.modal-stats.compact-stats .modal-stat-card .sub{font-size:10px;margin-top:4px}}
 .dd-badge.neutral{color:var(--text-light);background:var(--bg-light);border:1px solid var(--border)}
 
@@ -1619,12 +1620,11 @@ function _mgHistReturnCardHtml(stockCode, etf, canvasId, eager = true) {
   const arrowId = 'histRetArrow_' + canvasId;
   return `<div class="modal-stat-card" id="${cardId}" style="position:relative">
     <div class="label" style="text-align:center">📜 歷史進出報酬率</div>
-    <div id="${bodyId}" style="margin-top:8px;max-height:180px;overflow-y:auto;overflow-x:hidden"
+    <div id="${bodyId}" style="margin-top:0;overflow-y:auto;overflow-x:hidden"
       onscroll="_histRetScroll(this,'${arrowId}')">
       <span style="font-size:0.65em;color:#64748b">⏳ 計算中…</span>
     </div>
-    <div id="${arrowId}" style="display:none;text-align:center;font-size:11px;color:#0369A1;font-weight:700;
-      padding-top:4px;letter-spacing:1px;animation:histArrowBounce 1s ease-in-out infinite">▼ 滑動查看更多</div>
+    <div id="${arrowId}" class="hist-ret-arrow" title="向下滑動查看更多">▼</div>
   </div>`;
 }
 
@@ -1651,22 +1651,22 @@ async function _fillHistReturnCard(stockCode, etf, canvasId) {
     const rows = orderedCycles.map((cycle, i) => {
       const endISO  = cycle.sellDate ? _mgToISO(cycle.sellDate) : new Date().toISOString().slice(0,10);
       const isLast  = i === orderedCycles.length - 1;
-      const label   = cycle.holdStatus === '持有中'
-        ? '<span style="color:#059669;font-size:0.78em;font-weight:800;background:rgba(5,150,105,0.1);border-radius:5px;padding:2px 7px;white-space:nowrap;display:inline-block">持有中</span>'
-        : '<span style="color:#E11D48;font-size:0.78em;font-weight:800;background:rgba(225,29,72,0.08);border-radius:5px;padding:2px 7px;white-space:nowrap;display:inline-block">已出清</span>';
+      const label = cycle.holdStatus === '持有中'
+        ? '<span class="hist-ret-status" style="color:#059669;background:rgba(5,150,105,0.1)">持有中</span>'
+        : '<span class="hist-ret-status" style="color:#E11D48;background:rgba(225,29,72,0.08)">已出清</span>';
 
       if (!prices?.length) {
-        return `<div style="padding:9px 0;${isLast?'':'border-bottom:1.5px solid #E2EBF5'}">
-          <div style="font-size:0.8em;color:#64748b;font-weight:600">${cycle.buyDate}</div>
-          <div style="margin-top:4px;display:flex;align-items:center;gap:4px">${label}<span style="font-size:0.75em;color:#94a3b8">無快取</span></div>
+        return `<div class="hist-ret-row">
+          <div class="hist-ret-main"><div class="hist-ret-dates">${cycle.buyDate}${cycle.sellDate?' → '+cycle.sellDate:''}</div>
+          <div class="hist-ret-meta">${label}<span>無快取</span></div></div>
         </div>`;
       }
 
       const actual = _mgCalculateActualReturn(cycle, prices, endISO);
       if (!actual) {
-        return `<div style="padding:9px 0;${isLast?'':'border-bottom:1.5px solid #E2EBF5'}">
-          <div style="font-size:0.8em;color:#64748b;font-weight:600">${cycle.buyDate}${cycle.sellDate?' → '+cycle.sellDate:''}</div>
-          <div style="margin-top:4px;display:flex;align-items:center;gap:4px">${label}<span style="font-size:0.75em;color:#94a3b8">—</span></div>
+        return `<div class="hist-ret-row">
+          <div class="hist-ret-main"><div class="hist-ret-dates">${cycle.buyDate}${cycle.sellDate?' → '+cycle.sellDate:''}</div>
+          <div class="hist-ret-meta">${label}<span>—</span></div></div>
         </div>`;
       }
 
@@ -1676,25 +1676,18 @@ async function _fillHistReturnCard(stockCode, etf, canvasId) {
       const retStr = ret != null ? `${sign}${ret}%` : '—';
       const days  = _mgDays(_mgToISO(cycle.buyDate), actual.endDate || endISO);
 
-      return `<div style="padding:9px 0;${isLast?'':'border-bottom:1.5px solid #E2EBF5'}">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;flex-wrap:nowrap">
-          <div style="min-width:0;flex:1;overflow:hidden">
-            <div style="font-size:0.78em;color:#0F2840;font-weight:700;line-height:1.3">
-              ${cycle.buyDate}${cycle.sellDate?'<br>→ '+cycle.sellDate:''}
-            </div>
-            <div style="margin-top:4px;display:flex;align-items:center;gap:4px;flex-wrap:nowrap">
-              ${label}
-              <span style="font-size:0.75em;color:#94a3b8;white-space:nowrap">${days}天</span>
-            </div>
-            <div style="margin-top:3px;font-size:0.69em;color:#64748b">加權買進成本 ${actual.averageBuyPrice.toFixed(2)}</div>
-          </div>
-          <span style="color:${color};font-weight:900;font-size:1.05em;white-space:nowrap;flex-shrink:0;padding-left:4px;padding-top:2px">${retStr}</span>
+      return `<div class="hist-ret-row">
+        <div class="hist-ret-main">
+          <div class="hist-ret-dates">${cycle.buyDate}${cycle.sellDate?' → '+cycle.sellDate:''}</div>
+          <div class="hist-ret-meta">${label}<span>${days}天</span><span>成本 ${actual.averageBuyPrice.toFixed(2)}</span></div>
         </div>
+        <span class="hist-ret-value" style="color:${color}">${retStr}</span>
       </div>`;
     });
 
     if (!document.getElementById('histRetBody_' + canvasId)) return;
     bodyEl.innerHTML = rows.join('') || '<span style="font-size:0.8em;color:#94a3b8">無資料</span>';
+    bodyEl.scrollTop = 0;
 
     // 顯示箭頭（若內容可捲動）
     requestAnimationFrame(() => {
