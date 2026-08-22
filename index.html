@@ -1586,7 +1586,7 @@ function _mgRetCardResult(label, isSold, ret, buyDate, endDate, canvasId, detail
   const color = ret >= 0 ? '#059669' : '#E11D48';
   const tag   = isSold ? '出清' : '目前';
   const breakdown = detail?.averageBuyPrice != null
-    ? `${tag}｜加權成本 ${detail.averageBuyPrice.toFixed(2)}<br><span style="font-size:0.9em">已實現 ${_mgSignedPct(detail.realizedPct)}｜未實現 ${_mgSignedPct(detail.unrealizedPct)}</span>`
+    ? `${tag}｜加權成本 ${detail.averageBuyPrice.toFixed(2)}`
     : `${tag}｜${buyDate||''} → ${endDate||''}`;
   return '<div class="modal-stat-card" id="retCard_' + canvasId + '">'
     + '<div class="label">' + label + '</div>'
@@ -1768,7 +1768,7 @@ async function showStockDetail(stockCode, preferredETF=null){
         ${_mgRetCardHtml(stockCode, etf, data, canvasId, _isActiveTab)}
         ${_mgHistReturnCardHtml(stockCode, etf, canvasId, _isActiveTab)}
       </div>
-      <p style="margin:10px 0 14px;padding:9px 11px;background:#EFF6FF;border:1px solid #BAD4EA;border-radius:9px;color:#47647D;font-size:0.76em;line-height:1.55">ℹ️ 報酬率依 ETF 日終持股變化與當日收盤價推估；反映已實現與未實現損益，非基金實際盤中成交均價。</p>
+      <p style="margin:10px 0 14px;padding:9px 11px;background:#EFF6FF;border:1px solid #BAD4EA;border-radius:9px;color:#47647D;font-size:0.76em;line-height:1.55">ℹ️ 報酬率依 ETF 日終持股變化與當日收盤價推估，已納入歷次買進、減碼與出清現金流；非基金實際盤中成交均價。</p>
       <div class="chart-container">
         <h3>📈 持股歷史走勢</h3>
         <div class="chart-hint">🖱 滾輪縮放 &nbsp;|&nbsp; 拖曳平移 &nbsp;|&nbsp; 👆 雙指縮放 &nbsp;|&nbsp; 下方拖曳選取區間</div>
@@ -2729,7 +2729,7 @@ async function _modalLoadReturn(stockCode, etf, canvasId) {
     const sign  = ret >= 0 ? '+' : '';
     const color = ret >= 0 ? '#059669' : '#E11D48';
     valEl.innerHTML = `<span style="color:${color};font-weight:900;font-size:1.05em">${sign}${ret}%</span>`;
-    if (subEl) subEl.innerHTML = `${retLabel}｜加權成本 ${actual.averageBuyPrice.toFixed(2)}<br><span style="font-size:0.9em">已實現 ${_mgSignedPct(actual.realizedPct)}｜未實現 ${_mgSignedPct(actual.unrealizedPct)}</span>`;
+    if (subEl) subEl.textContent = `${retLabel}｜加權成本 ${actual.averageBuyPrice.toFixed(2)}`;
 
   } catch (err) {
     console.error('[_modalLoadReturn]', err);
