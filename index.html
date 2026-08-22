@@ -533,7 +533,10 @@ html.low-end .content-section { background: rgba(255,255,255,1) !important; }
 .price-change-line,.price-date-line{display:block;white-space:nowrap}.price-date-line{color:#64748b}
 .modal-stats.compact-stats .modal-stat-card[id^="retCard_"] .sub{margin-top:3px;min-height:28px;line-height:1.2;font-size:12px}
 .ret-info-line{display:block;white-space:nowrap}.ret-info-line b{font-weight:800;color:#334155}
-.modal-stats.compact-stats .modal-stat-card:nth-child(-n+2){justify-content:flex-start}.modal-stats.compact-stats .modal-stat-card:nth-child(2) .sub{visibility:hidden}
+/* 所有摘要卡共用固定標題列；其餘內容作為一組在剩餘高度置中。 */
+.modal-stats.compact-stats .modal-stat-card:not([id^="histRetCard_"]) .value{margin-top:auto}
+.modal-stats.compact-stats .modal-stat-card:not([id^="histRetCard_"]) .sub{margin-bottom:auto}
+.modal-stats.compact-stats .modal-stat-card:nth-child(2) .sub{visibility:hidden}
 .modal-stats.compact-stats .modal-stat-card[id^="histRetCard_"]{align-items:stretch;justify-content:flex-start;text-align:left;padding:7px 10px!important}
 .modal-stats.compact-stats .modal-stat-card[id^="histRetCard_"] .label{justify-content:center;text-align:center;margin-bottom:1px}
 .modal-stats.compact-stats .modal-stat-card [id^="histRetBody_"]{margin-top:0!important;height:72px!important;max-height:none!important;line-height:1.15;scroll-snap-type:y mandatory;overscroll-behavior:contain}
