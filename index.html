@@ -1429,6 +1429,45 @@ async function _modalLoadTodayPrice(stockCode, canvasId) {
   }
 }
 
+// ── 持股異動表的歷史收盤價／日漲跌 ─────────────────────────────────────
+async function _fillHistoryPriceColumns(stockCode, etf, canvasId) {
+  try {
+    const history = stockData?.[stockCode]?.etf_holdings?.[etf]?.history;
+    if (!history?.length) return;
+    const cache = await _loadStockPriceCache();
+    const prices = cache?.data?.[stockCode]?.prices;
+    if (!prices?.length) return;
+
+    [...history].reverse().forEach((record, historyIndex) => {
+      const priceCell = document.getElementById(`histPrice_${canvasId}_${historyIndex}`);
+      const changeCell = document.getElementById(`histPriceChange_${canvasId}_${historyIndex}`);
+      if (!priceCell && !changeCell) return;
+      const targetDate = _mgToISO(record.date);
+      // 正常情況使用同日收盤；遇休市或資料延遲時才取下一個交易日。
+      const priceIndex = prices.findIndex(p => p.date >= targetDate && Number(p.close ?? p.open) > 0);
+      const priceRec = priceIndex >= 0 ? prices[priceIndex] : null;
+      const close = Number(priceRec?.close ?? priceRec?.open);
+      if (!priceRec || !Number.isFinite(close)) {
+        if (priceCell) priceCell.textContent = '—';
+        return;
+      }
+      if (priceCell) {
+        priceCell.textContent = close.toLocaleString('zh-TW', { maximumFractionDigits: 2 });
+        if (priceRec.date !== targetDate) priceCell.title = `使用最近交易日 ${priceRec.date} 收盤價`;
+      }
+      const previousClose = Number(prices[priceIndex - 1]?.close ?? prices[priceIndex - 1]?.open);
+      if (!changeCell || !Number.isFinite(previousClose) || previousClose === 0) return;
+      const change = close - previousClose;
+      const pct = change / previousClose * 100;
+      const color = change > 0 ? '#059669' : change < 0 ? '#E11D48' : '#64748b';
+      const sign = change > 0 ? '+' : '';
+      changeCell.innerHTML = `<span style="color:${color}">${sign}${change.toFixed(2)}<br><small>(${sign}${pct.toFixed(2)}%)</small></span>`;
+    });
+  } catch (error) {
+    console.warn('[History price columns]', error.message);
+  }
+}
+
 // ── Modal 報酬率卡片 HTML（自動從快取讀取，有值直接顯示）──────────────
 function _mgRetCardHtml(stockCode, etf, data, canvasId, eager = true) {
   // 用 _mgExtractCycles 邏輯判斷最新週期是否為「持有中」
@@ -1669,9 +1708,11 @@ function showStockDetail(stockCode, preferredETF=null){
         <canvas id="${canvasId}" style="width:100%;height:auto;max-height:300px"></canvas>
       </div>
       <div class="modal-table">
-        <table><thead><tr><th>日期</th><th>張數</th><th>權重</th><th>張數±</th><th>權重±</th><th>狀態</th></tr></thead>
-        <tbody>${(data.history||[]).slice().reverse().map(r => `<tr>
+        <table><thead><tr><th>日期</th><th>收盤價</th><th>日漲跌</th><th>張數</th><th>權重</th><th>張數±</th><th>權重±</th><th>狀態</th></tr></thead>
+        <tbody>${(data.history||[]).slice().reverse().map((r, historyIndex) => `<tr>
           <td style="font-weight:700">${r.date}</td>
+          <td id="histPrice_${canvasId}_${historyIndex}" style="font-weight:800;color:#475569">載入中</td>
+          <td id="histPriceChange_${canvasId}_${historyIndex}" style="font-weight:700;color:#64748b">—</td>
           <td style="font-weight:800">${r.count}</td>
           <td>${r.weight}%</td>
           <td style="color:${(r.count_change??0)>0?'var(--success)':(r.count_change??0)<0?'var(--danger)':'inherit'};font-weight:800">
@@ -1714,6 +1755,7 @@ function showStockDetail(stockCode, preferredETF=null){
   } else {
     setTimeout(_drawFn, 150);
   }
+  _fillHistoryPriceColumns(stockCode, firstETF, firstCanvasId);
 }
 
 function switchModalETF(event, stockCode, etfCode){
@@ -1748,6 +1790,7 @@ function switchModalETF(event, stockCode, etfCode){
       if (histCard) histCard.dataset.loaded = '1';
       _fillHistReturnCard(stockCode, etfCode, canvasId);
     }
+    _fillHistoryPriceColumns(stockCode, etfCode, canvasId);
   }
 }
 
