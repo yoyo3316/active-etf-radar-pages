@@ -529,7 +529,8 @@ html.low-end .content-section { background: rgba(255,255,255,1) !important; }
 .modal-stats.compact-stats .modal-stat-card .value{min-height:29px;line-height:1.05;margin:0;display:flex;align-items:center;justify-content:center;white-space:nowrap;font-size:21px}
 .modal-stats.compact-stats .modal-stat-card:nth-child(-n+2) .value{font-size:27px}
 .modal-stats.compact-stats .modal-stat-card .sub{margin:6px 0 0;min-height:26px;max-width:100%;white-space:normal;overflow:hidden;text-overflow:ellipsis;line-height:1.28;font-size:11px}
-.modal-stats.compact-stats .modal-stat-card[id^="priceCard_"] .sub{margin-top:5px;min-height:16px;white-space:nowrap;font-size:10px;letter-spacing:-.15px}
+.modal-stats.compact-stats .modal-stat-card[id^="priceCard_"] .sub{margin-top:3px;min-height:25px;white-space:normal;font-size:10px;line-height:1.2}
+.price-change-line,.price-date-line{display:block;white-space:nowrap}.price-date-line{color:#64748b}
 .modal-stats.compact-stats .modal-stat-card[id^="retCard_"] .sub{margin-top:3px;min-height:25px;line-height:1.2;font-size:10px}
 .ret-info-line{display:block;white-space:nowrap}.ret-info-line b{font-weight:800;color:#334155}
 .modal-stats.compact-stats .modal-stat-card[id^="histRetCard_"]{align-items:stretch;justify-content:flex-start;text-align:left;padding:7px 10px!important}
@@ -1473,7 +1474,7 @@ function _todayPriceCardResult(prices, canvasId) {
     + (change != null
         ? '<span style="color:' + color + ';font-weight:700">' + arrow + ' ' + sign + change.toFixed(2) + ' (' + sign + pct.toFixed(2) + '%)</span>'
         : '無漲跌資料')
-    + '&nbsp;｜&nbsp;' + (last?.date || '') + '</span></div>'
+    + '</span><span class="price-date-line">｜' + (last?.date || '') + '</span></div>'
     + '</div>';
 }
 
