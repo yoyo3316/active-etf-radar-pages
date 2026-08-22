@@ -1562,9 +1562,9 @@ function _mgRetCardHtml(stockCode, etf, data, canvasId, eager = true) {
     _isSoldCard = !_cardActive;
   }
   const isSold = _isSoldCard;
-  const label  = isSold ? '持有期間漲幅' : '買進後漲幅';
+  const label  = isSold ? '持有期間漲幅' : '目前報酬率';
 
-  // 只用加權平均買進成本與結束日收盤價計算漲幅，不混入已實現或最高報酬拆分。
+  // 持有中以剩餘部位加權成本計算；已出清卡維持首次買進至結束日的漲幅。
   if (eager) setTimeout(() => _modalLoadReturn(stockCode, etf, canvasId), 0);
   return '<div class="modal-stat-card" id="retCard_' + canvasId + '">'
     + '<div class="label">' + label + '</div>'
@@ -1738,7 +1738,7 @@ async function showStockDetail(stockCode, preferredETF=null){
         ${_mgRetCardHtml(stockCode, etf, data, canvasId, _isActiveTab)}
         ${_mgHistReturnCardHtml(stockCode, etf, canvasId, _isActiveTab)}
       </div>
-      <p style="margin:10px 0 14px;padding:9px 11px;background:#EFF6FF;border:1px solid #BAD4EA;border-radius:9px;color:#47647D;font-size:0.76em;line-height:1.55">ℹ️ 買進後漲幅以本輪首次買進日收盤價與最新收盤價推估；加權平均成本則依各次買進張數與當日收盤價計算。非基金實際盤中成交均價。</p>
+      <p style="margin:10px 0 14px;padding:9px 11px;background:#EFF6FF;border:1px solid #BAD4EA;border-radius:9px;color:#47647D;font-size:0.76em;line-height:1.55">ℹ️ 持有中報酬率以剩餘持股的加權平均成本與最新收盤價推估；部分減碼已依當時成本扣除，不影響剩餘部位成本。已出清與歷史卡則顯示首次買進至結束日的漲幅。</p>
       <div class="chart-container">
         <h3>📈 持股歷史走勢</h3>
         <div class="chart-hint">🖱 滾輪縮放 &nbsp;|&nbsp; 拖曳平移 &nbsp;|&nbsp; 👆 雙指縮放 &nbsp;|&nbsp; 下方拖曳選取區間</div>
@@ -2667,7 +2667,7 @@ async function _modalLoadReturn(stockCode, etf, canvasId) {
     const lastCycle = cycles[cycles.length - 1];
     const isSold = lastCycle.holdStatus !== '持有中';
     const endDateISO = lastCycle.sellDate ? _mgToISO(lastCycle.sellDate) : new Date().toISOString().slice(0, 10);
-    const retLabel   = isSold ? '持有期間漲幅' : '買進後漲幅';
+    const retLabel   = isSold ? '持有期間漲幅' : '目前報酬率';
 
     const ghData = await _loadStockPriceCache();
 
@@ -2690,8 +2690,9 @@ async function _modalLoadReturn(stockCode, etf, canvasId) {
       return;
     }
 
-    const ret   = actual.firstBuyPrice > 0 && actual.endPrice > 0
-      ? +((actual.endPrice - actual.firstBuyPrice) / actual.firstBuyPrice * 100).toFixed(2)
+    const costBasis = isSold ? actual.firstBuyPrice : actual.holdingCost;
+    const ret   = costBasis > 0 && actual.endPrice > 0
+      ? +((actual.endPrice - costBasis) / costBasis * 100).toFixed(2)
       : null;
     if (ret == null) {
       valEl.innerHTML = '<span style="font-size:0.75em;color:#64748b">快取中找不到對應價格</span>';
@@ -2700,7 +2701,9 @@ async function _modalLoadReturn(stockCode, etf, canvasId) {
     const sign  = ret >= 0 ? '+' : '';
     const color = ret >= 0 ? '#059669' : '#E11D48';
     valEl.innerHTML = `<span style="color:${color};font-weight:900;font-size:1.05em">${sign}${ret}%</span>`;
-    if (subEl) subEl.textContent = `首次買進 ${actual.firstBuyPrice.toFixed(2)}｜加權平均成本 ${actual.averageBuyPrice.toFixed(2)}`;
+    if (subEl) subEl.textContent = isSold
+      ? `首次買進 ${actual.firstBuyPrice.toFixed(2)}｜加權平均成本 ${actual.averageBuyPrice.toFixed(2)}`
+      : `目前加權成本 ${actual.holdingCost.toFixed(2)}｜最新收盤 ${actual.endPrice.toFixed(2)}`;
 
   } catch (err) {
     console.error('[_modalLoadReturn]', err);
