@@ -1568,6 +1568,8 @@ function _mgRetCardHtml(stockCode, etf, data, canvasId, eager = true) {
   const entries = (_mgAllResults || []).filter(r => r.code === stockCode && r.etf === etf);
   const mgEntry = entries.find(r => r.holdStatus === '持有中') || entries[entries.length - 1];
   if (mgEntry && mgEntry.currentReturn != null) {
+    // 排行 Worker 的資料只作為即時首屏；隨後用完整現金流補算期間最高總報酬。
+    if (eager) setTimeout(() => _modalLoadReturn(stockCode, etf, canvasId), 0);
     return _mgRetCardResult(label, isSold, mgEntry.currentReturn,
       mgEntry.buyDate, mgEntry.currentDate || mgEntry.sellDate, canvasId, mgEntry);
   }
@@ -1585,10 +1587,7 @@ function _mgRetCardHtml(stockCode, etf, data, canvasId, eager = true) {
 function _mgRetCardResult(label, isSold, ret, buyDate, endDate, canvasId, detail = null) {
   const sign  = ret >= 0 ? '+' : '';
   const color = ret >= 0 ? '#059669' : '#E11D48';
-  const tag   = isSold ? '出清' : '目前';
-  const breakdown = detail?.averageBuyPrice != null
-    ? `${tag}｜加權成本 ${detail.averageBuyPrice.toFixed(2)}`
-    : `${tag}｜${buyDate||''} → ${endDate||''}`;
+  const breakdown = detail?.realizedPct != null ? _mgReturnBreakdownHtml(detail) : `${buyDate||''} → ${endDate||''}`;
   return '<div class="modal-stat-card" id="retCard_' + canvasId + '">'
     + '<div class="label">' + label + '</div>'
     + '<div class="value" id="retVal_' + canvasId + '">'
@@ -1596,6 +1595,13 @@ function _mgRetCardResult(label, isSold, ret, buyDate, endDate, canvasId, detail
     + '</div>'
     + '<div class="sub" id="retSub_' + canvasId + '">' + breakdown + '</div>'
     + '</div>';
+}
+
+function _mgReturnBreakdownHtml(detail) {
+  const peak = Number.isFinite(detail.maxReturnPct)
+    ? `期間最大 ${_mgSignedPct(detail.maxReturnPct)}`
+    : '期間最大計算中…';
+  return `<span style="font-size:0.9em">已實現 ${_mgSignedPct(detail.realizedPct)}｜當前損益 ${_mgSignedPct(detail.unrealizedPct)}<br>${peak}</span>`;
 }
 
 
@@ -2192,12 +2198,49 @@ function _mgCalculateActualReturn(period, prices, endISO) {
   const unrealizedPct = +(unrealizedProfit / totalBuyCost * 100).toFixed(2);
   const holdingCost = positionQty > 0 ? positionCost / positionQty : null;
   const averageBuyPrice = totalBoughtQty ? totalBuyCost / totalBoughtQty : null;
+  const maxTotalReturn = _mgCalculateMaxTotalReturn(period, prices);
   return {
     returnPct, positionQty, holdingCost, averageBuyPrice, totalBuyCost, totalSellValue,
     realizedProfit, unrealizedProfit, realizedPct, unrealizedPct,
     firstBuyPrice, firstBuyDate, endPrice: endPrice || null, endDate: endRec?.date || null,
-    marketValue
+    marketValue, maxReturnPct: maxTotalReturn?.maxReturnPct ?? null,
+    maxReturnDate: maxTotalReturn?.maxReturnDate ?? null
   };
+}
+
+// 依每個交易日的累計買進、賣出與收盤市值重算報酬率。
+// 這和單純「最高價 - 平均買價」不同，可正確反映中途減碼後再買回。
+function _mgCalculateMaxTotalReturn(period, prices) {
+  let previousCount = 0;
+  const transactions = [];
+  for (const rec of period.history || []) {
+    const qty = _mgTransactionQuantity(rec, previousCount);
+    previousCount = Number(rec.count ?? previousCount);
+    if (!qty) continue;
+    const priceRec = _mgPriceAtOrAfter(prices, _mgToISO(rec.date));
+    const price = Number(priceRec?.close ?? priceRec?.open);
+    if (price > 0) transactions.push({ date: priceRec.date, qty, price });
+  }
+  let txIndex = 0, positionQty = 0, positionCost = 0, totalBuyCost = 0, totalSellValue = 0;
+  let maxReturnPct = null, maxReturnDate = null;
+  for (const priceRec of prices) {
+    while (txIndex < transactions.length && transactions[txIndex].date <= priceRec.date) {
+      const tx = transactions[txIndex++];
+      if (tx.qty > 0) { positionQty += tx.qty; positionCost += tx.qty * tx.price; totalBuyCost += tx.qty * tx.price; }
+      else if (positionQty > 0) {
+        const soldQty = Math.min(Math.abs(tx.qty), positionQty);
+        totalSellValue += soldQty * tx.price;
+        positionCost -= positionCost / positionQty * soldQty;
+        positionQty -= soldQty;
+        if (positionQty < 1e-8) { positionQty = 0; positionCost = 0; }
+      }
+    }
+    const close = Number(priceRec.close ?? priceRec.open);
+    if (!totalBuyCost || !Number.isFinite(close) || close <= 0) continue;
+    const pct = (totalSellValue + positionQty * close - totalBuyCost) / totalBuyCost * 100;
+    if (maxReturnPct == null || pct > maxReturnPct) { maxReturnPct = pct; maxReturnDate = priceRec.date; }
+  }
+  return maxReturnPct == null ? null : { maxReturnPct: +maxReturnPct.toFixed(2), maxReturnDate };
 }
 
 function _mgSignedPct(value) {
@@ -2722,7 +2765,7 @@ async function _modalLoadReturn(stockCode, etf, canvasId) {
     const sign  = ret >= 0 ? '+' : '';
     const color = ret >= 0 ? '#059669' : '#E11D48';
     valEl.innerHTML = `<span style="color:${color};font-weight:900;font-size:1.05em">${sign}${ret}%</span>`;
-    if (subEl) subEl.textContent = `${retLabel}｜加權成本 ${actual.averageBuyPrice.toFixed(2)}`;
+    if (subEl) subEl.innerHTML = _mgReturnBreakdownHtml(actual);
 
   } catch (err) {
     console.error('[_modalLoadReturn]', err);
