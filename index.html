@@ -523,12 +523,15 @@ html.low-end .content-section { background: rgba(255,255,255,1) !important; }
 
 /* 個股彈窗摘要：緊湊、等高、文字基線一致 */
 .modal-stats.compact-stats{grid-template-columns:1.28fr 1.28fr .86fr 1.02fr 1.18fr;gap:10px;grid-auto-rows:112px;align-items:stretch;margin-bottom:16px}
-.modal-stats.compact-stats .modal-stat-card{height:112px;min-height:0;padding:11px 12px;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
+.modal-stats.compact-stats .modal-stat-card{height:112px;min-height:0;padding:11px 12px;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;text-align:center}
 .modal-stats.compact-stats .modal-stat-card:nth-child(-n+2){height:112px;padding:11px 14px}
 .modal-stats.compact-stats .modal-stat-card .label{height:18px;margin:0 0 5px;display:flex;align-items:center;justify-content:center;white-space:nowrap;font-size:11px;line-height:1.2}
-.modal-stats.compact-stats .modal-stat-card .value{line-height:1.05;margin:0;white-space:nowrap;font-size:21px}
+.modal-stats.compact-stats .modal-stat-card .value{min-height:29px;line-height:1.05;margin:0;display:flex;align-items:center;justify-content:center;white-space:nowrap;font-size:21px}
 .modal-stats.compact-stats .modal-stat-card:nth-child(-n+2) .value{font-size:27px}
 .modal-stats.compact-stats .modal-stat-card .sub{margin:6px 0 0;min-height:26px;max-width:100%;white-space:normal;overflow:hidden;text-overflow:ellipsis;line-height:1.28;font-size:11px}
+.modal-stats.compact-stats .modal-stat-card[id^="priceCard_"] .sub{margin-top:5px;min-height:16px;white-space:nowrap;font-size:10px;letter-spacing:-.15px}
+.modal-stats.compact-stats .modal-stat-card[id^="retCard_"] .sub{margin-top:3px;min-height:25px;line-height:1.2;font-size:10px}
+.ret-info-line{display:block;white-space:nowrap}.ret-info-line b{font-weight:800;color:#334155}
 .modal-stats.compact-stats .modal-stat-card[id^="histRetCard_"]{align-items:stretch;justify-content:flex-start;text-align:left;padding:7px 10px!important}
 .modal-stats.compact-stats .modal-stat-card[id^="histRetCard_"] .label{justify-content:center;text-align:center;margin-bottom:1px}
 .modal-stats.compact-stats .modal-stat-card [id^="histRetBody_"]{margin-top:0!important;height:72px!important;max-height:none!important;line-height:1.15;scroll-snap-type:y mandatory;overscroll-behavior:contain}
@@ -1466,11 +1469,11 @@ function _todayPriceCardResult(prices, canvasId) {
     + '<span style="color:' + color + ';font-weight:900;font-size:1.05em">'
     + (close != null ? close : '--') + '</span>'
     + '</div>'
-    + '<div class="sub" id="priceSub_' + canvasId + '">'
+    + '<div class="sub" id="priceSub_' + canvasId + '"><span class="price-change-line">'
     + (change != null
         ? '<span style="color:' + color + ';font-weight:700">' + arrow + ' ' + sign + change.toFixed(2) + ' (' + sign + pct.toFixed(2) + '%)</span>'
         : '無漲跌資料')
-    + '&nbsp;｜&nbsp;' + (last?.date || '') + '</div>'
+    + '&nbsp;｜&nbsp;' + (last?.date || '') + '</span></div>'
     + '</div>';
 }
 
@@ -1733,7 +1736,7 @@ async function showStockDetail(stockCode, preferredETF=null){
     return `<div class="etf-content${etf===firstETF?' active':''}" data-etf="${etf}">
       <div class="modal-stats compact-stats">
         <div class="modal-stat-card"><div class="label">目前張數</div><div class="value primary">${data.current_count??0}</div><div class="sub">張</div></div>
-        <div class="modal-stat-card"><div class="label">目前權重</div><div class="value">${data.current_weight??0}%</div></div>
+        <div class="modal-stat-card"><div class="label">目前權重</div><div class="value">${data.current_weight??0}%</div><div class="sub">&nbsp;</div></div>
         ${_todayPriceCardHtml(stockCode, canvasId, _isActiveTab)}
         ${_mgRetCardHtml(stockCode, etf, data, canvasId, _isActiveTab)}
         ${_mgHistReturnCardHtml(stockCode, etf, canvasId, _isActiveTab)}
@@ -2701,9 +2704,9 @@ async function _modalLoadReturn(stockCode, etf, canvasId) {
     const sign  = ret >= 0 ? '+' : '';
     const color = ret >= 0 ? '#059669' : '#E11D48';
     valEl.innerHTML = `<span style="color:${color};font-weight:900;font-size:1.05em">${sign}${ret}%</span>`;
-    if (subEl) subEl.textContent = isSold
-      ? `首次買進 ${actual.firstBuyPrice.toFixed(2)}｜加權平均成本 ${actual.averageBuyPrice.toFixed(2)}`
-      : `目前加權成本 ${actual.holdingCost.toFixed(2)}｜最新收盤 ${actual.endPrice.toFixed(2)}`;
+    if (subEl) subEl.innerHTML = isSold
+      ? `<span class="ret-info-line">加權成本 <b>${actual.averageBuyPrice.toFixed(2)}</b></span><span class="ret-info-line">結束收盤 <b>${actual.endPrice.toFixed(2)}</b></span>`
+      : `<span class="ret-info-line">加權成本 <b>${actual.holdingCost.toFixed(2)}</b></span><span class="ret-info-line">最新收盤 <b>${actual.endPrice.toFixed(2)}</b></span>`;
 
   } catch (err) {
     console.error('[_modalLoadReturn]', err);
