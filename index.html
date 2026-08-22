@@ -1664,7 +1664,7 @@ async function _fillHistReturnCard(stockCode, etf, canvasId) {
       return `<div class="hist-ret-row">
         <div class="hist-ret-main">
           <div class="hist-ret-dates">${cycle.buyDate}${cycle.sellDate?' → '+cycle.sellDate:''}</div>
-          <div class="hist-ret-meta">${label}<span>${days}天</span><span>均成本 ${actual.averageBuyPrice.toFixed(2)}</span></div>
+          <div class="hist-ret-meta">${label}<span>${days}天</span></div>
         </div>
         <span class="hist-ret-value" style="color:${color}">${retStr}</span>
       </div>`;
